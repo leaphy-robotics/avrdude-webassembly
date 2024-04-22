@@ -64,7 +64,6 @@ addEventListener('message', async msg => {
                 break
             }
             case 'init': {
-                throw new Error('init is not supported in this worker')
                 if (navigator.serial) {
                     port = (await navigator.serial.getPorts())[data.port]
                 } else {
