@@ -1,6 +1,6 @@
 {
   "name": "@leaphy-robotics/avrdude-webassembly",
-  "version": "1.6.1",
+  "version": "1.6.2",
   "description": "An port of avrdude to the browser using WebAssembly",
   "type": "module",
   "scripts": {
