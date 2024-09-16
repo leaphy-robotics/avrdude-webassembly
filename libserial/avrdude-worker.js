@@ -5,60 +5,59 @@ let opts;
 let writer;
 let reader;
 
-let buffer = new Uint8Array([])
 let onData
-let available = new Promise(resolve => onData = resolve)
-let continuousRead = null
+let writeBuffer
+let readBuffer
+let writeAddressBuf
+let readAddressBuf
 
 const readPromise = (customReader) => new Promise(async () => {
     while (true) {
         const { value, done } = await customReader.read()
         if (done) break
 
-        buffer = new Uint8Array([...buffer, ...value])
-        onData()
+        let address = readAddressBuf[0];
+        let read = 0;
+
+        while (read !== value.length) {
+            const initialLength = Math.min(value.length, readBuffer.length - address);
+            readBuffer.set(value.slice(read, read + initialLength), address);
+            read += initialLength;
+            address += initialLength;
+
+            if (address === readBuffer.length) {
+                address = 3;
+            }
+        }
+        readAddressBuf[0] = address;
+
+        onData && onData()
     }
 })
 
+function readFromBuffer(currentAddress, targetAddress, buffer) {
+    if (currentAddress < targetAddress) {
+        return buffer.slice(currentAddress, targetAddress)
+    }
 
+    const array = new Uint8Array(buffer.length - currentAddress + targetAddress - 3)
+    array.set(buffer.slice(currentAddress))
+    array.set(buffer.slice(3, targetAddress), buffer.length - currentAddress)
+
+    return array
+}
 
 addEventListener('message', async msg => {
     try {
         const data = msg.data
 
         switch (data.type) {
-            case 'write': {
-                await writer.write(data.data)
-                break
-            }
-            case 'read': {
-                const neededBytes = data.requiredBytes
-                // await available
-                // available = new Promise(resolve => onData = resolve)
-                let dataBuffer = new Uint8Array([])
-
-                while (dataBuffer.length < neededBytes) {
-                    if (buffer.length > 0) {
-                        // only take the needed bytes
-                        const bytesToTake = Math.min(neededBytes - dataBuffer.length, buffer.length)
-                        dataBuffer = new Uint8Array([...dataBuffer, ...buffer.slice(0, bytesToTake)])
-                        buffer = buffer.slice(bytesToTake)
-                        continue
-                    }
-                    await available
-                    available = new Promise(resolve => onData = resolve)
-                }
-
-                postMessage({type: 'read', result: dataBuffer})
-                break
-            }
             case 'clear-read-buffer': {
                 const timeoutPromise = new Promise(resolve => setTimeout(resolve, data.timeout))
-                // await available
-                // available = new Promise(resolve => onData = resolve)
-                let result = await Promise.race([timeoutPromise, available])
-                available = new Promise(resolve => onData = resolve)
-                buffer = new Uint8Array([])
+                const onDone = new Promise(resolve => onData = resolve)
+
+                await Promise.race([timeoutPromise, onDone])
+                readAddressBuf[0] = 3
 
                 postMessage({type: 'clear-read-buffer'})
                 break
@@ -71,11 +70,28 @@ addEventListener('message', async msg => {
                     port = new WebUSBSerial(device)
                 }
 
+                readBuffer = new Uint8Array(data.readBuffer)
+                writeBuffer = new Uint8Array(data.writeBuffer)
+                readAddressBuf = new Uint16Array(data.readBuffer)
+                writeAddressBuf = new Uint16Array(data.writeBuffer)
+
                 await port.open(data.options)
                 opts = data.options
                 writer = port.writable.getWriter()
                 reader = port.readable.getReader()
-                continuousRead = readPromise(reader)
+
+                let address = 3
+                setInterval(async () => {
+                    if (writeAddressBuf[0] === address) return
+
+                    const target = writeAddressBuf[0]
+                    const data = readFromBuffer(address, target, writeBuffer)
+                    await writer.write(data)
+
+                    address = target
+                }, 0)
+
+                readPromise(reader).then()
                 postMessage({type: 'ready'})
                 break
             }
