@@ -23,7 +23,9 @@ EM_JS(void, write_data, (unsigned char* buf, int len), {
 
     while (written !== len) {
         const initialLength = Math.min(len - written, window.writeBuffer.length - writeAddress);
-        window.writeBuffer.set(new Uint8Array(Module.HEAPU8.buffer.slice(buf + written, buf + written + initialLength)), writeAddress);
+        const data = new Uint8Array(Module.HEAPU8.buffer.slice(buf + written, buf + written + initialLength));
+        window.writeBuffer.set(data, writeAddress);
+        window.avrdudeLog = [...window.avrdudeLog, "Sending: " + Array.from(data).join(",")];
 
         written += initialLength;
         writeAddress += initialLength;
@@ -32,8 +34,6 @@ EM_JS(void, write_data, (unsigned char* buf, int len), {
             writeAddress = 3;
         };
     };
-
-    console.log(len);
 
     window.writeAddressBuf[0] = writeAddress;
 });
@@ -84,7 +84,9 @@ EM_ASYNC_JS(void, read_data, (int timeoutMs, int length), {
     }
 
     const ptr = window.funcs._malloc(read * Uint8Array.BYTES_PER_ELEMENT);
+    const data = result.slice(0, read);
     window.funcs.HEAPU8.set(result.slice(0, read), ptr);
+    window["avrdudeLog"] = [...window["avrdudeLog"], "Received: " + Array.from(data).join(",")];
 
     window.funcs._dataCallback(ptr, read);
 });
