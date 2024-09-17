@@ -78,7 +78,7 @@ EM_ASYNC_JS(void, read_data, (int timeoutMs, int length), {
         }
     }
 
-    if (read === 0) {
+    if (read < length) {
         window["avrdudeLog"] = [...window["avrdudeLog"], "Timeout"];
         return;
     }
