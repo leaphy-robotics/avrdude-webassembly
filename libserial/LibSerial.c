@@ -18,9 +18,24 @@ void errorCallback() {
 
 
 EM_JS(void, write_data, (unsigned char* buf, int len), {
-    var jsBuffer = new Uint8Array(Module.HEAPU8.buffer, buf, len);
-    window.avrDudeWorker.postMessage({ type: 'write', data: jsBuffer });
-    window.avrdudeLog = [...window.avrdudeLog, "Sending: " + Array.from(jsBuffer).join(",")];
+    let writeAddress = window.writeAddressBuf[0];
+    let written = 0;
+
+    while (written !== len) {
+        const initialLength = Math.min(len - written, window.writeBuffer.length - writeAddress);
+        const data = new Uint8Array(Module.HEAPU8.buffer.slice(buf + written, buf + written + initialLength));
+        window.writeBuffer.set(data, writeAddress);
+        window.avrdudeLog = [...window.avrdudeLog, "Sending: " + Array.from(data).join(",")];
+
+        written += initialLength;
+        writeAddress += initialLength;
+
+        if (writeAddress === window.writeBuffer.length) {
+            writeAddress = 3;
+        };
+    };
+
+    window.writeAddressBuf[0] = writeAddress;
 });
 
 
@@ -36,36 +51,44 @@ EM_ASYNC_JS(void, clear_read_buffer, (int timeoutMs), {
             resolve();
         };
     });
+    window.readAddress = 3;
     window.avrdudeLog = [...window.avrdudeLog, "Read buffer cleared"];
 });
 
 EM_ASYNC_JS(void, read_data, (int timeoutMs, int length), {
-    window.avrDudeWorker.postMessage({ type: 'read', timeout: timeoutMs, requiredBytes: length });
-    const data = await new Promise((resolve, _) => {
-        window.avrDudeWorker.onmessage = (event) => {
-            // check if the response type is an error
-            if (event.data.type === "error") {
-                window.funcs._errorCallback();
-            } else if (event.data.type == "read") {
-                resolve(event.data);
-            }
+    const result = new Uint8Array(length);
+    let read = 0;
+    let end = Date.now() + timeoutMs;
+
+    while (read !== length && end > Date.now()) {
+        if (window.readAddress === window.readAddressBuf[0]) continue;
+
+        let targetAddress = window.readAddressBuf[0];
+        if (targetAddress < window.readAddress) {
+            targetAddress = window.readBuffer.length;
         };
-    });
-    const result = data.result;
+        targetAddress = Math.min(targetAddress, window.readAddress + length - read);
 
-    if (result instanceof Uint8Array && result.length > 0) {
-        //console.log("Received: ", result);
-        // convert data into an readable string formated like this 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
-        const printResult = Array.from(result).join(",");
-        window["avrdudeLog"] = [...window["avrdudeLog"], "Received: " + printResult];
-        const ptr = window.funcs._malloc(result.length * Uint8Array.BYTES_PER_ELEMENT);
-        window.funcs.HEAPU8.set(result, ptr);
+        result.set(window.readBuffer.slice(window.readAddress, targetAddress), read);
+        read += targetAddress - window.readAddress;
 
-        // Call the C++ function with the pointer and the length of the array
-        window.funcs._dataCallback(ptr, result.length);
-    } else {
-        window["avrdudeLog"] = [...window["avrdudeLog"], "Timeout"];
+        window.readAddress = targetAddress;
+        if (window.readAddress === window.readBuffer.length) {
+            window.readAddress = 3;
+        }
     }
+
+    if (read === 0) {
+        window["avrdudeLog"] = [...window["avrdudeLog"], "Timeout"];
+        return;
+    }
+
+    const ptr = window.funcs._malloc(read * Uint8Array.BYTES_PER_ELEMENT);
+    const data = result.slice(0, read);
+    window.funcs.HEAPU8.set(result.slice(0, read), ptr);
+    window["avrdudeLog"] = [...window["avrdudeLog"], "Received: " + Array.from(data).join(",")];
+
+    window.funcs._dataCallback(ptr, read);
 });
 
 // clang-format off
@@ -109,7 +132,15 @@ EM_ASYNC_JS(void, open_serial_port, (int baudRateInt), {
        }
     }
 
-    worker.postMessage({ type: 'init', options: serialOpts, port: portNumber });
+    const writeBuffer = new SharedArrayBuffer(4096);
+    const readBuffer = new SharedArrayBuffer(4096);
+    worker.postMessage({
+        type: 'init',
+        options: serialOpts,
+        port: portNumber,
+        writeBuffer, readBuffer,
+    });
+
     await new Promise(resolve => {
         worker.onmessage = (event) => {
             if (event.data.type === "error") {
@@ -118,6 +149,15 @@ EM_ASYNC_JS(void, open_serial_port, (int baudRateInt), {
             resolve();
         };
     });
+
+    // Initialize read and write buffers with address
+    window.writeBuffer = new Uint8Array(writeBuffer);
+    window.readBuffer = new Uint8Array(readBuffer);
+    window.writeAddressBuf = new Uint16Array(writeBuffer);
+    window.readAddressBuf = new Uint16Array(readBuffer);
+    window.writeAddressBuf[0] = 3;
+    window.readAddressBuf[0] = 3;
+    window.readAddress = 3;
 
     // open the port with the correct baud rate
     window.avrDudeWorker = worker;
