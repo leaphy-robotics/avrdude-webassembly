@@ -132,8 +132,8 @@ EM_ASYNC_JS(void, open_serial_port, (int baudRateInt), {
        }
     }
 
-    const writeBuffer = new SharedArrayBuffer(4096);
-    const readBuffer = new SharedArrayBuffer(4096);
+    const writeBuffer = new SharedArrayBuffer(64 * 1024);
+    const readBuffer = new SharedArrayBuffer(64 * 1024);
     worker.postMessage({
         type: 'init',
         options: serialOpts,
